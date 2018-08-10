@@ -22,6 +22,7 @@ HEADERS  += widget.h \
 FORMS    += widget.ui
 
 INCLUDEPATH += $$PWD/ffmpeg/include \
+               $$PWD/SDL2/include \
 
 
 LIBS += $$PWD/ffmpeg/lib/avcodec.lib \
@@ -31,7 +32,8 @@ LIBS += $$PWD/ffmpeg/lib/avcodec.lib \
         $$PWD/ffmpeg/lib/avutil.lib\
         $$PWD/ffmpeg/lib/postproc.lib\
         $$PWD/ffmpeg/lib/swresample.lib\
-        $$PWD/ffmpeg/lib/swscale.lib
+        $$PWD/ffmpeg/lib/swscale.lib \
+        $$PWD/SDL2/lib/x86/SDL2.lib \
 
 RESOURCES += \
     videoplayer.qrc

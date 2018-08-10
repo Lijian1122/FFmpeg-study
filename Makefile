@@ -193,6 +193,7 @@ Makefile: VideoPlayer.pro E:\QtX86\Qt5.6.3\5.6.3\msvc2013\mkspecs\win32-msvc2013
 		E:\QtX86\Qt5.6.3\5.6.3\msvc2013\mkspecs\features\win32\qt_config.prf \
 		E:\QtX86\Qt5.6.3\5.6.3\msvc2013\mkspecs\win32-msvc2013\qmake.conf \
 		E:\QtX86\Qt5.6.3\5.6.3\msvc2013\mkspecs\features\spec_post.prf \
+		.qmake.stash \
 		E:\QtX86\Qt5.6.3\5.6.3\msvc2013\mkspecs\features\exclusive_builds.prf \
 		E:\QtX86\Qt5.6.3\5.6.3\msvc2013\mkspecs\features\default_pre.prf \
 		E:\QtX86\Qt5.6.3\5.6.3\msvc2013\mkspecs\features\win32\default_pre.prf \
@@ -340,6 +341,7 @@ E:\QtX86\Qt5.6.3\5.6.3\msvc2013\mkspecs\features\qt_config.prf:
 E:\QtX86\Qt5.6.3\5.6.3\msvc2013\mkspecs\features\win32\qt_config.prf:
 E:\QtX86\Qt5.6.3\5.6.3\msvc2013\mkspecs\win32-msvc2013\qmake.conf:
 E:\QtX86\Qt5.6.3\5.6.3\msvc2013\mkspecs\features\spec_post.prf:
+.qmake.stash:
 E:\QtX86\Qt5.6.3\5.6.3\msvc2013\mkspecs\features\exclusive_builds.prf:
 E:\QtX86\Qt5.6.3\5.6.3\msvc2013\mkspecs\features\default_pre.prf:
 E:\QtX86\Qt5.6.3\5.6.3\msvc2013\mkspecs\features\win32\default_pre.prf:
@@ -380,7 +382,7 @@ clean: debug-clean release-clean  FORCE
 	-$(DEL_FILE) VideoPlayer.idb
 distclean: debug-distclean release-distclean  FORCE
 	-$(DEL_FILE) Makefile
-	-$(DEL_FILE) VideoPlayer.lib VideoPlayer.pdb
+	-$(DEL_FILE) .qmake.stash VideoPlayer.lib VideoPlayer.pdb
 
 debug-mocclean:
 	@set MAKEFLAGS=$(MAKEFLAGS)
