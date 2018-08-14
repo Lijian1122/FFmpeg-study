@@ -72,167 +72,84 @@ static int packet_queue_get(PacketQueue *q, AVPacket *pkt, int block)
     return ret;
 }
 
-static int audio_decode_frame(VideoState *is, double *pts_ptr)
+int audio_decode_frame(VideoState *is, uint8_t *audio_buf, int buf_size)
 {
-    int len1, len2, decoded_data_size;
-    AVPacket *pkt = &is->audio_pkt;
-    int got_frame = 0;
-    int64_t dec_channel_layout;
-    int wanted_nb_samples, resampled_data_size, n;
 
-    double pts;
+    static AVPacket pkt;
+    static uint8_t *audio_pkt_data = NULL;
+    static int audio_pkt_size = 0;
+    int len1, data_size;
 
-    for (;;) {
+    AVCodecContext *aCodecCtx = is->aCodecCtx;
+    AVFrame *audioFrame = is->audioFrame;
+    PacketQueue *audioq = is->audioq;
 
-        while (is->audio_pkt_size > 0) {
+    for(;;)
+    {
+        if(packet_queue_get(audioq, &pkt, 1) < 0)
+        {
+            return -1;
+        }
+        audio_pkt_data = pkt.data;
+        audio_pkt_size = pkt.size;
+        while(audio_pkt_size > 0)
+        {
+            int got_picture;
 
-//            if (is->isPause == true)
-//            {
-//                SDL_Delay(10);
-//                continue;
-//            }
-
-            if (!is->audio_frame) {
-                if (!(is->audio_frame = avcodec_alloc_frame())) {
-                    return AVERROR(ENOMEM);
-                }
-            } else
-                avcodec_get_frame_defaults(is->audio_frame);
-
-            len1 = avcodec_decode_audio4(is->audio_st->codec, is->audio_frame,
-                    &got_frame, pkt);
-            if (len1 < 0) {
-                // error, skip the frame
-                is->audio_pkt_size = 0;
-                break;
+            int ret = avcodec_decode_audio4(aCodecCtx, audioFrame, &got_picture, &pkt);
+            if( ret < 0 ) {
+                printf("Error in decoding audio frame.\n");
+                exit(0);
             }
 
-            is->audio_pkt_data += len1;
-            is->audio_pkt_size -= len1;
+            if( got_picture ) {
+                int in_samples = audioFrame->nb_samples;
+                short *sample_buffer = (short*)malloc(audioFrame->nb_samples * 2 * 2);
+                memset(sample_buffer, 0, audioFrame->nb_samples * 4);
 
-            if (!got_frame)
-                continue;
+                int i=0;
+                float *inputChannel0 = (float*)(audioFrame->extended_data[0]);
 
-            /* 计算解码出来的桢需要的缓冲大小 */
-            decoded_data_size = av_samples_get_buffer_size(NULL,
-                    is->audio_frame->channels, is->audio_frame->nb_samples,
-                    (AVSampleFormat)is->audio_frame->format, 1);
+                // Mono
+                if( audioFrame->channels == 1 ) {
+                    for( i=0; i<in_samples; i++ ) {
+                        float sample = *inputChannel0++;
+                        if( sample < -1.0f ) {
+                            sample = -1.0f;
+                        } else if( sample > 1.0f ) {
+                            sample = 1.0f;
+                        }
 
-            dec_channel_layout =
-                    (is->audio_frame->channel_layout
-                            && is->audio_frame->channels
-                                    == av_get_channel_layout_nb_channels(
-                                            is->audio_frame->channel_layout)) ?
-                            is->audio_frame->channel_layout :
-                            av_get_default_channel_layout(
-                                    is->audio_frame->channels);
-
-            wanted_nb_samples = is->audio_frame->nb_samples;
-
-            if (is->audio_frame->format != is->audio_src_fmt
-                    || dec_channel_layout != is->audio_src_channel_layout
-                    || is->audio_frame->sample_rate != is->audio_src_freq
-                    || (wanted_nb_samples != is->audio_frame->nb_samples
-                            && !is->swr_ctx)) {
-                if (is->swr_ctx)
-                    swr_free(&is->swr_ctx);
-                is->swr_ctx = swr_alloc_set_opts(NULL,
-                        is->audio_tgt_channel_layout, (AVSampleFormat)is->audio_tgt_fmt,
-                        is->audio_tgt_freq, dec_channel_layout,
-                        (AVSampleFormat)is->audio_frame->format, is->audio_frame->sample_rate,
-                        0, NULL);
-                if (!is->swr_ctx || swr_init(is->swr_ctx) < 0) {
-                    //fprintf(stderr,"swr_init() failed\n");
-                    break;
-                }
-                is->audio_src_channel_layout = dec_channel_layout;
-                is->audio_src_channels = is->audio_st->codec->channels;
-                is->audio_src_freq = is->audio_st->codec->sample_rate;
-                is->audio_src_fmt = is->audio_st->codec->sample_fmt;
-            }
-
-            /* 这里我们可以对采样数进行调整，增加或者减少，一般可以用来做声画同步 */
-            if (is->swr_ctx) {
-                const uint8_t **in =
-                        (const uint8_t **) is->audio_frame->extended_data;
-                uint8_t *out[] = { is->audio_buf2 };
-                if (wanted_nb_samples != is->audio_frame->nb_samples) {
-                    if (swr_set_compensation(is->swr_ctx,
-                            (wanted_nb_samples - is->audio_frame->nb_samples)
-                                    * is->audio_tgt_freq
-                                    / is->audio_frame->sample_rate,
-                            wanted_nb_samples * is->audio_tgt_freq
-                                    / is->audio_frame->sample_rate) < 0) {
-                        //fprintf(stderr,"swr_set_compensation() failed\n");
-                        break;
+                        sample_buffer[i] = (int16_t)(sample * 32767.0f);
+                    }
+                } else
+                { // Stereo
+                    float* inputChannel1 = (float*)(audioFrame->extended_data[1]);
+                    for( i=0; i<in_samples; i++)
+                    {
+                        sample_buffer[i*2] = (int16_t)((*inputChannel0++) * 32767.0f);
+                        sample_buffer[i*2+1] = (int16_t)((*inputChannel1++) * 32767.0f);
                     }
                 }
-
-                len2 = swr_convert(is->swr_ctx, out,
-                        sizeof(is->audio_buf2) / is->audio_tgt_channels
-                                / av_get_bytes_per_sample(is->audio_tgt_fmt),
-                        in, is->audio_frame->nb_samples);
-                if (len2 < 0) {
-                    //fprintf(stderr,"swr_convert() failed\n");
-                    break;
-                }
-                if (len2
-                        == sizeof(is->audio_buf2) / is->audio_tgt_channels
-                                / av_get_bytes_per_sample(is->audio_tgt_fmt)) {
-                    //fprintf(stderr,"warning: audio buffer is probably too small\n");
-                    swr_init(is->swr_ctx);
-                }
-                is->audio_buf = is->audio_buf2;
-                resampled_data_size = len2 * is->audio_tgt_channels
-                        * av_get_bytes_per_sample(is->audio_tgt_fmt);
-            } else {
-                resampled_data_size = decoded_data_size;
-                is->audio_buf = is->audio_frame->data[0];
+//                fwrite(sample_buffer, 2, in_samples*2, pcmOutFp);
+                memcpy(audio_buf,sample_buffer,in_samples*4);
+                free(sample_buffer);
             }
 
-            pts = is->audio_clock;
-            *pts_ptr = pts;
-            n = 2 * is->audio_st->codec->channels;
-            is->audio_clock += (double) resampled_data_size
-                    / (double) (n * is->audio_st->codec->sample_rate);
+            audio_pkt_size -= ret;
 
-            // We have data, return it and come back for more later
-            return resampled_data_size;
+            if (audioFrame->nb_samples <= 0)
+            {
+                continue;
+            }
+
+            data_size = audioFrame->nb_samples * 4;
+
+            return data_size;
         }
-
-//        if (is->isPause == true)
-//        {
-//            SDL_Delay(10);
-//            continue;
-//        }
-
-        if (pkt->data)
-            av_free_packet(pkt);
-        memset(pkt, 0, sizeof(*pkt));
-//        if (is->quit)
-//            return -1;
-        if (packet_queue_get(&is->audioq, pkt, 0) <= 0)
-            return -1;
-
-//        if(pkt->data == is->flush_pkt.data) {
-////fprintf(stderr,"avcodec_flush_buffers(is->audio...\n");
-//        avcodec_flush_buffers(is->audio_st->codec);
-////        fprintf(stderr,"avcodec_flush_buffers(is->audio 222\n");
-
-//        continue;
-
-//        }
-
-        is->audio_pkt_data = pkt->data;
-        is->audio_pkt_size = pkt->size;
-
-        /* if update, update the audio clock w/pts */
-        if (pkt->pts != AV_NOPTS_VALUE) {
-            is->audio_clock = av_q2d(is->audio_st->time_base) * pkt->pts;
-        }
-    }
-
-    return 0;
+        if(pkt.data)
+            av_free_packet(&pkt);
+   }
 }
 
 void audio_callback(void *userdata, Uint8 *stream, int len)
@@ -457,12 +374,12 @@ int video_thread(void *arg)
     ///这里我们改成了 将解码后的YUV数据转换成RGB32
     img_convert_ctx = sws_getContext(pCodecCtx->width, pCodecCtx->height,
             pCodecCtx->pix_fmt, pCodecCtx->width, pCodecCtx->height,
-            AV_PIX_FMT_RGB32, SWS_BICUBIC, NULL, NULL, NULL);
+            PIX_FMT_RGB32, SWS_BICUBIC, NULL, NULL, NULL);
 
-    numBytes = avpicture_get_size(AV_PIX_FMT_RGB32, pCodecCtx->width,pCodecCtx->height);
+    numBytes = avpicture_get_size(PIX_FMT_RGB32, pCodecCtx->width,pCodecCtx->height);
 
     out_buffer_rgb = (uint8_t *) av_malloc(numBytes * sizeof(uint8_t));
-    avpicture_fill((AVPicture *) pFrameRGB, out_buffer_rgb, AV_PIX_FMT_RGB32,
+    avpicture_fill((AVPicture *) pFrameRGB, out_buffer_rgb, PIX_FMT_RGB32,
             pCodecCtx->width, pCodecCtx->height);
 
     while(1)
@@ -514,7 +431,7 @@ int video_thread(void *arg)
             //把这个RGB数据 用QImage加载
             QImage tmpImg((uchar *)out_buffer_rgb,pCodecCtx->width,pCodecCtx->height,QImage::Format_RGB32);
             QImage image = tmpImg.copy(); //把图像复制一份 传递给界面显示
-            is->player->displayVideo(image); //调用激发信号的函数
+            is->player->disPlayVideo(image); //调用激发信号的函数
         }
 
         av_free_packet(packet);
@@ -554,6 +471,20 @@ void VideoPlayer::run()
 {
     char *file_path = "2233.mp4";
 
+    AVFormatContext *pFormatCtx;
+    AVCodecContext *pCodecCtx;
+    AVCodec *pCodec;
+    AVFrame *pFrame, *pFrameRGB;
+    AVPacket *packet;
+    uint8_t *out_buffer;
+
+    AVCodecContext *aCodecCtx;
+    AVCodec *aCodec;
+
+    static struct SwsContext *img_convert_ctx;
+
+    int audioStream ,videoStream, i, numBytes;
+    int ret, got_picture;
 
     av_register_all(); //初始化FFMPEG  调用了这个才能正常使用编码器和解码器
 
@@ -564,17 +495,13 @@ void VideoPlayer::run()
         exit(1);
     }
 
-    VideoState *is = &mVideoState;
+    //SDL_Surface *screen = SDL_SetVideoMode(640, 480, 8, SDL_SWSURFACE);
 
-    AVFormatContext *pFormatCtx;
-    AVCodecContext *pCodecCtx;
-    AVCodec *pCodec;
-
-    AVCodecContext *aCodecCtx;
-    AVCodec *aCodec;
-
-    int audioStream ,videoStream, i;
-
+//    SDL_Window *sdlWindow = SDL_CreateWindow("MyVideo",
+//                                 SDL_WINDOWPOS_UNDEFINED,
+//                                 SDL_WINDOWPOS_UNDEFINED,
+//                                 0, 0,
+//                                 SDL_WINDOW_FULLSCREEN_DESKTOP);
 
     //Allocate an AVFormatContext.
     pFormatCtx = avformat_alloc_context();
@@ -615,13 +542,6 @@ void VideoPlayer::run()
         return;
     }
 
-    is->ic = pFormatCtx;
-
-    if(audioStream >= 0)
-    {
-        audio_stream_component_open(&mVideoState,audioStream);
-    }
-
     ///查找音频解码器
     aCodecCtx = pFormatCtx->streams[audioStream]->codec;
     aCodec = avcodec_find_decoder(aCodecCtx->codec_id);
@@ -637,7 +557,43 @@ void VideoPlayer::run()
         return;
     }
 
-    is->audio_st = pFormatCtx->streams[audioStream];
+    //初始化音频队列
+    PacketQueue *audioq = new PacketQueue;
+    packet_queue_init(audioq);
+
+    // 分配解码过程中的使用缓存
+    AVFrame* audioFrame = av_frame_alloc();
+
+    mVideoState.aCodecCtx = aCodecCtx;
+    mVideoState.audioq = audioq;
+    mVideoState.audioFrame = audioFrame;
+
+    ///  打开SDL播放设备 - 开始
+//    if(SDL_Init(SDL_INIT_AUDIO | SDL_INIT_TIMER))
+//    {
+//            printf( "Could not initialize SDL - %s\n", SDL_GetError());
+//            return;
+//    }
+
+    SDL_LockAudio();
+    SDL_AudioSpec spec;
+    SDL_AudioSpec wanted_spec;
+    wanted_spec.freq = aCodecCtx->sample_rate;
+    wanted_spec.format = AUDIO_S16SYS;
+    wanted_spec.channels = aCodecCtx->channels;
+    wanted_spec.silence = 0;
+    wanted_spec.samples = SDL_AUDIO_BUFFER_SIZE;
+    wanted_spec.callback = audio_callback;
+    wanted_spec.userdata = &mVideoState;
+    if(SDL_OpenAudio(&wanted_spec, &spec) < 0)
+    {
+        fprintf(stderr, "SDL_OpenAudio: %s\n", SDL_GetError());
+        return;
+    }
+    SDL_UnlockAudio();
+    SDL_PauseAudio(0);
+    //SDL_PauseAudio(3333);
+    ///  打开SDL播放设备 - 结束
 
     ///查找视频解码器
     pCodecCtx = pFormatCtx->streams[videoStream]->codec;
@@ -654,40 +610,83 @@ void VideoPlayer::run()
         return;
     }
 
-    is->video_st = pFormatCtx->streams[videoStream];
-    packet_queue_init(&is->videoq);
+    mVideoState.video_st = pFormatCtx->streams[videoStream];
 
-    //创建一个线程专门来解码视频
-    is->video_tid = SDL_CreateThread(video_thread,"video_thread",&mVideoState);
-    is->player = this;
+    pFrame = av_frame_alloc();
+    pFrameRGB = av_frame_alloc();
 
+    ///这里我们改成了 将解码后的YUV数据转换成RGB32
+    img_convert_ctx = sws_getContext(pCodecCtx->width, pCodecCtx->height,
+            pCodecCtx->pix_fmt, pCodecCtx->width, pCodecCtx->height,
+            AV_PIX_FMT_RGB32, SWS_BICUBIC, NULL, NULL, NULL);
 
-    AVPacket *packet = (AVPacket*)malloc(sizeof(AVPacket)); //分配一个packet
+    numBytes = avpicture_get_size(AV_PIX_FMT_RGB32, pCodecCtx->width,pCodecCtx->height);
+
+    out_buffer = (uint8_t *) av_malloc(numBytes * sizeof(uint8_t));
+    avpicture_fill((AVPicture *) pFrameRGB, out_buffer, AV_PIX_FMT_RGB32,
+            pCodecCtx->width, pCodecCtx->height);
+
+    int y_size = pCodecCtx->width * pCodecCtx->height;
+
+    packet = (AVPacket *) malloc(sizeof(AVPacket)); //分配一个packet
+    av_new_packet(packet, y_size); //分配packet的数据
 
     av_dump_format(pFormatCtx, 0, file_path, 0); //输出视频信息
 
+    int64_t start_time = av_gettime();
+    int64_t pts = 0; //当前视频的pts
+
     while (1)
     {
-        //这里做了个限制  当队列里面的数据超过某个大小的时候 就暂停读取  防止一下子就把视频读完了，导致的空间分配不足
-        /* 这里audioq.size是指队列中的所有数据包带的音频数据的总量或者视频数据总量，并不是包的数量 */
-        //这个值可以稍微写大一些
-        if (is->audioq.size > MAX_AUDIO_SIZE || is->videoq.size > MAX_VIDEO_SIZE) {
-            SDL_Delay(10);
-            continue;
-        }
-
         if (av_read_frame(pFormatCtx, packet) < 0)
         {
             break; //这里认为视频读取完了
         }
 
+        int64_t realTime = av_gettime() - start_time; //主时钟时间
+        while(pts > realTime)
+        {
+            SDL_Delay(10);
+            realTime = av_gettime() - start_time; //主时钟时间
+        }
+
         if (packet->stream_index == videoStream)
         {
-            packet_queue_put(&is->videoq,packet);
+            ret = avcodec_decode_video2(pCodecCtx, pFrame, &got_picture,packet);
+            if (packet->dts == AV_NOPTS_VALUE && pFrame->opaque&& *(uint64_t*) pFrame->opaque != AV_NOPTS_VALUE)
+            {
+                pts = *(uint64_t *) pFrame->opaque;
+            }
+            else if (packet->dts != AV_NOPTS_VALUE)
+            {
+                pts = packet->dts;
+            }
+            else
+            {
+                pts = 0;
+            }
+
+            pts *= 1000000 * av_q2d(mVideoState.video_st->time_base);
+            pts = synchronize_video(&mVideoState, pFrame, pts);
+
+            if (got_picture)
+            {
+                sws_scale(img_convert_ctx,
+                        (uint8_t const * const *) pFrame->data,
+                        pFrame->linesize, 0, pCodecCtx->height, pFrameRGB->data,
+                        pFrameRGB->linesize);
+
+                //把这个RGB数据 用QImage加载
+                QImage tmpImg((uchar *)out_buffer,pCodecCtx->width,pCodecCtx->height,QImage::Format_RGB32);
+                QImage image = tmpImg.copy(); //把图像复制一份 传递给界面显示
+                emit sig_GetOneFrame(image);  //发送信号
+            }
+
+            av_free_packet(packet);
         }
         else if( packet->stream_index == audioStream )
         {
-            packet_queue_put(&is->audioq, packet);
+            packet_queue_put(mVideoState.audioq, packet);
             //这里我们将数据存入队列 因此不调用 av_free_packet 释放
         }
         else
@@ -698,6 +697,8 @@ void VideoPlayer::run()
 
     }
 
+    av_free(out_buffer);
+    av_free(pFrameRGB);
     avcodec_close(pCodecCtx);
     avformat_close_input(&pFormatCtx);
 }

@@ -16,13 +16,14 @@ Widget::Widget(QWidget *parent) :
            SLOT(slotGetOneFrame(QImage)));
 
     m_player->setFileName("cuc_ieschool.flv");
+    m_player->startPlay();
 
 
 }
 
 void Widget::run()
 {
-   m_player->startPlay();
+   //m_player->startPlay();
 }
 
 void Widget::slotGetOneFrame(QImage img)
@@ -31,6 +32,8 @@ void Widget::slotGetOneFrame(QImage img)
     qDebug()<<"jieshou...";
     mImage = img;
     update(); //调用update将执行 paintEvent函数
+
+    qDebug()<<"chonghui wancheng...";
 }
 
 void Widget::paintEvent(QPaintEvent *event)
